@@ -22,8 +22,10 @@ echo "OPENAI_API_KEY=your-api-key-here" > .env
 ```
 
 ## Kết quả
-- File transcript được lưu tại: `./data/transcript_[timestamp].txt`
-- Nội dung: Text transcript tiếng Anh từ video YouTube
+- File transcript được lưu tại: `./data/transcript_[youtube_id].txt`
+- Tên file sử dụng YouTube video ID (ví dụ: `transcript_dQw4w9WgXcQ.txt`)
+- Nếu không extract được ID → fallback về timestamp
+- Format: URL ở dòng đầu, 1 dòng trống, sau đó là text transcript tiếng Anh
 - File MP3 tự động xóa (trừ khi dùng --keep-audio)
 - Thư mục `./data` được tạo tự động
 
@@ -42,7 +44,8 @@ echo "OPENAI_API_KEY=your-api-key-here" > .env
 6. **"Không tìm thấy file audio"** → Video có thể bị restricted hoặc không có audio
 
 ## Cấu hình hiện tại
+- **Priority 1**: YouTube Captions (miễn phí, nhanh, chính xác)
+- **Priority 2**: AI Transcription với `gpt-4o-transcribe`
 - **Language**: `en` (tiếng Anh)
-- **Model**: `gpt-4o-transcribe` (fallback: `whisper-1`)
 - **Response format**: `text` (plain text)
-- **Audio quality**: Cao nhất (0)
+- **Audio quality**: Cao nhất (0) - chỉ khi cần AI transcription

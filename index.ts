@@ -124,8 +124,7 @@ class YouTubeTranscriber {
         }
         
         if (response.status === 400) {
-          console.warn("⚠️  Model gpt-4o-transcribe không hoạt động, thử fallback sang whisper-1...");
-          return this.transcribeWithWhisperFallback(mp3FilePath);
+          throw new Error(`Model gpt-4o-transcribe không khả dụng: ${response.statusText}`);
         }
         
         throw new Error(`OpenAI API error: ${response.statusText} (${response.status})`);
@@ -147,52 +146,133 @@ class YouTubeTranscriber {
   }
 
   /**
-   * Fallback: sử dụng whisper-1 model nếu gpt-4o-transcribe không hoạt động
+   * Lấy transcript có sẵn từ YouTube (closed captions)
    */
-  private async transcribeWithWhisperFallback(mp3FilePath: string): Promise<string> {
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    
-    if (!openaiApiKey) {
-      throw new Error("Cần thiết lập OPENAI_API_KEY environment variable");
-    }
-
-    console.log("🔄 Đang sử dụng whisper-1 model...");
+  private async getYouTubeTranscript(youtubeUrl: string): Promise<string | null> {
+    console.log("🔍 Đang kiểm tra transcript có sẵn từ YouTube...");
     
     try {
-      const formData = new FormData();
-      const audioFile = Bun.file(mp3FilePath);
-      formData.append('file', audioFile);
-      formData.append('model', 'whisper-1');
-      formData.append('language', 'en');
-      formData.append('response_format', 'text');
-
-      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiApiKey}`,
-        },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error(`❌ OPENAI_API_KEY không hợp lệ. Vui lòng kiểm tra API key của bạn.`);
-        }
-        throw new Error(`OpenAI API error with whisper-1: ${response.statusText} (${response.status})`);
-      }
-
-      // Với response_format='text', API trả về string trực tiếp
-      const transcript = await response.text();
+      // Tải subtitle/captions từ YouTube
+      const result = await $`yt-dlp --write-sub --write-auto-sub --sub-lang en --sub-format vtt --skip-download -o ${path.join(this.tempDir, "%(title)s.%(ext)s")} ${youtubeUrl}`.quiet();
       
-      if (!transcript || transcript.trim() === '') {
-        throw new Error("Không nhận được transcript từ OpenAI API (whisper-1)");
+      if (result.exitCode !== 0) {
+        console.log("⚠️  Không tìm thấy subtitle/captions");
+        return null;
       }
       
-      console.log("✅ Transcript đã được tạo thành công (whisper-1)");
-      return transcript.trim();
+      // Tìm file subtitle (.vtt)
+      const vttFiles = await $`find ${this.tempDir} -name "*.vtt" 2>/dev/null || true`;
+      const subtitleFiles = vttFiles.stdout.toString().trim().split('\n').filter(f => f && f.trim());
+      
+      if (subtitleFiles.length === 0) {
+        console.log("⚠️  Không tìm thấy file subtitle");
+        return null;
+      }
+      
+      // Đọc và parse file VTT
+      const vttFile = subtitleFiles[0];
+      if (!vttFile) {
+        console.log("⚠️  Không tìm thấy file VTT hợp lệ");
+        return null;
+      }
+      
+      const vttContent = await Bun.file(vttFile).text();
+      
+      // Parse VTT content để lấy text thuần
+      const transcript = this.parseVTTContent(vttContent);
+      
+      if (transcript && transcript.trim()) {
+        console.log("✅ Đã lấy transcript từ YouTube captions");
+        return transcript.trim();
+      }
+      
+      return null;
     } catch (error) {
-      console.error("❌ Lỗi khi sử dụng whisper-1 fallback:", error);
-      throw error;
+      console.log("⚠️  Không thể lấy transcript từ YouTube:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Parse VTT content thành plain text
+   */
+  private parseVTTContent(vttContent: string): string {
+    const lines = vttContent.split('\n');
+    const textLines: string[] = [];
+    
+    let isTextLine = false;
+    
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      // Skip WEBVTT header
+      if (trimmedLine.startsWith('WEBVTT') || trimmedLine.startsWith('Kind:') || trimmedLine.startsWith('Language:')) {
+        continue;
+      }
+      
+      // Skip timestamp lines
+      if (trimmedLine.includes('-->')) {
+        isTextLine = true;
+        continue;
+      }
+      
+      // Skip empty lines
+      if (!trimmedLine) {
+        isTextLine = false;
+        continue;
+      }
+      
+      // Skip cue settings
+      if (trimmedLine.includes('align:') || trimmedLine.includes('position:')) {
+        continue;
+      }
+      
+      // Add text content
+      if (isTextLine && trimmedLine) {
+        // Remove VTT formatting tags
+        const cleanText = trimmedLine
+          .replace(/<[^>]*>/g, '') // Remove HTML tags
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'");
+        
+        if (cleanText && !textLines.includes(cleanText)) {
+          textLines.push(cleanText);
+        }
+      }
+    }
+    
+    return textLines.join(' ').replace(/\s+/g, ' ');
+  }
+
+  /**
+   * Extract YouTube video ID từ URL
+   */
+  private extractYouTubeId(url: string): string | null {
+    try {
+      // Pattern 1: https://www.youtube.com/watch?v=VIDEO_ID
+      // Pattern 2: https://youtu.be/VIDEO_ID
+      // Pattern 3: https://youtube.com/watch?v=VIDEO_ID
+      
+      const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/
+      ];
+      
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match && match[1]) {
+          return match[1];
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn("⚠️  Không thể extract YouTube ID:", error);
+      return null;
     }
   }
 
@@ -225,26 +305,46 @@ class YouTubeTranscriber {
 
       console.log(`🎬 Đang xử lý: ${youtubeUrl}`);
       
-      // Bước 1: Download và chuyển đổi thành MP3
-      const mp3File = await this.downloadAndConvertToMp3(youtubeUrl);
+      let transcript: string;
       
-      // Bước 2: Tạo transcript bằng OpenAI Whisper API
-      const transcript = await this.transcribeWithOpenAI(mp3File);
+      // Bước 1: Thử lấy transcript có sẵn từ YouTube trước
+      const youtubeTranscript = await this.getYouTubeTranscript(youtubeUrl);
       
-      // Bước 3: Đảm bảo thư mục output tồn tại
+      if (youtubeTranscript) {
+        // Có transcript sẵn từ YouTube
+        transcript = youtubeTranscript;
+        console.log("🎯 Sử dụng transcript từ YouTube captions");
+      } else {
+        // Không có transcript sẵn, phải download audio và dùng AI
+        console.log("⚙️  Không có transcript sẵn, chuyển sang AI transcription...");
+        
+        // Bước 2: Download và chuyển đổi thành MP3
+        const mp3File = await this.downloadAndConvertToMp3(youtubeUrl);
+        
+        // Bước 3: Tạo transcript bằng OpenAI Whisper API
+        transcript = await this.transcribeWithOpenAI(mp3File);
+      }
+      
+      // Đảm bảo thư mục output tồn tại
       if (!existsSync(outputDir)) {
         await mkdir(outputDir, { recursive: true });
         console.log(`📁 Đã tạo thư mục: ${outputDir}`);
       }
       
-      // Bước 4: Ghi transcript ra file
-      const outputFileName = `transcript_${Date.now()}.txt`;
+      // Tạo tên file với YouTube ID (nếu có) hoặc timestamp (fallback)
+      const youtubeId = this.extractYouTubeId(youtubeUrl);
+      const outputFileName = youtubeId 
+        ? `transcript_${youtubeId}.txt`
+        : `transcript_${Date.now()}.txt`;
       const outputPath = path.join(outputDir, outputFileName);
       
-      await writeFile(outputPath, transcript, 'utf-8');
+      // Tạo nội dung file với URL ở đầu
+      const fileContent = `${youtubeUrl}\n\n${transcript}`;
+      
+      await writeFile(outputPath, fileContent, 'utf-8');
       console.log(`📝 Transcript đã được lưu tại: ${outputPath}`);
       
-      // Bước 5: Dọn dẹp
+      // Dọn dẹp file tạm
       await this.cleanup(keepAudio);
       
       console.log("✅ Hoàn thành!");

@@ -54,16 +54,17 @@ bun run index.ts "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --output ./my_tra
 
 ## Cách hoạt động
 
-1. **Download Video**: Sử dụng `yt-dlp` để download video từ YouTube
-2. **Chuyển đổi Audio**: Tự động chuyển đổi thành MP3 với chất lượng cao
-3. **Tạo Transcript**: Sử dụng OpenAI model `gpt-4o-transcribe` (fallback `whisper-1`) với language='en' và response_format='text'
-4. **Lưu kết quả**: Ghi transcript ra file .txt với timestamp
+1. **Kiểm tra YouTube Captions**: Ưu tiên lấy transcript có sẵn từ YouTube (closed captions do người dùng nhập)
+2. **AI Transcription** (nếu cần): 
+   - Download video và chuyển đổi thành MP3 
+   - Sử dụng OpenAI model `gpt-4o-transcribe` với language='en' và response_format='text'
+3. **Lưu kết quả**: Ghi transcript ra file .txt với URL ở đầu và nội dung transcript
 
 ## Cấu trúc file output
 
 ```
 data/                         # Thư mục output mặc định
-├── transcript_1703123456789.txt  # File transcript chính
+├── transcript_dQw4w9WgXcQ.txt   # File transcript (YouTube ID làm tên)
 └── temp/                     # Thư mục tạm (tự động xóa)
     ├── video.mp3            # File audio (xóa nếu không dùng --keep-audio)
     └── video.txt            # File transcript tạm
