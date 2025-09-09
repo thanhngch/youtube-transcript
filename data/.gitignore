@@ -1,0 +1,10 @@
+# Ignore all files in data directory except this .gitignore
+*
+!.gitignore
+
+# Specifically ignore transcript files and temporary files
+transcript_*.txt
+temp/
+*.mp3
+*.wav
+*.m4a

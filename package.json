@@ -1,0 +1,21 @@
+{
+  "name": "youtube-transcript",
+  "version": "1.0.0",
+  "description": "Chuyển đổi YouTube URL thành transcript",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run index.ts",
+    "dev": "bun --watch index.ts"
+  },
+  "dependencies": {
+    "@types/node": "^20.0.0",
+    "bun-types": "^1.2.21",
+    "openai": "^4.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/bun": "latest"
+  },
+  "private": true
+}
