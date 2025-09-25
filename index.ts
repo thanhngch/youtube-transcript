@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from "fs/promises";
 import path from "path";
 
 interface TranscriptOptions {
-  youtubeUrl: string;
+  input: string;  // YouTube URL hoặc file path
   outputDir?: string;
   keepAudio?: boolean;
 }
@@ -248,6 +248,59 @@ class YouTubeTranscriber {
   }
 
   /**
+   * Kiểm tra input type: URL hay file path
+   */
+  private isUrl(input: string): boolean {
+    return input.startsWith('http://') || input.startsWith('https://');
+  }
+
+  /**
+   * Xử lý file MP3 local
+   */
+  private async processLocalMp3(filePath: string): Promise<string> {
+    console.log(`🎵 Đang xử lý file MP3 local: ${filePath}`);
+    
+    if (!existsSync(filePath)) {
+      throw new Error(`File không tồn tại: ${filePath}`);
+    }
+
+    // Kiểm tra file extension
+    const ext = path.extname(filePath).toLowerCase();
+    if (!['.mp3', '.wav', '.m4a', '.flac', '.aac'].includes(ext)) {
+      throw new Error(`Format file không được hỗ trợ: ${ext}. Chỉ hỗ trợ: .mp3, .wav, .m4a, .flac, .aac`);
+    }
+
+    let audioFile = filePath;
+    
+    // Convert sang MP3 nếu cần
+    if (ext !== '.mp3') {
+      console.log(`🔄 Đang convert ${ext} sang MP3...`);
+      const mp3File = path.join(this.tempDir, `${path.basename(filePath, ext)}.mp3`);
+      
+      // Đảm bảo thư mục temp tồn tại
+      await this.ensureTempDir();
+      
+      await $`ffmpeg -i ${filePath} -acodec mp3 ${mp3File} -y`;
+      audioFile = mp3File;
+      console.log(`✅ Convert hoàn thành: ${path.basename(mp3File)}`);
+    } else {
+      console.log(`✅ File MP3 sẵn sàng: ${path.basename(audioFile)}`);
+    }
+
+    return audioFile;
+  }
+
+  /**
+   * Tạo filename cho local file
+   */
+  private generateFilenameFromPath(filePath: string): string {
+    const baseName = path.basename(filePath, path.extname(filePath));
+    // Sanitize filename - remove special characters
+    const sanitized = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `transcript_${sanitized}.txt`;
+  }
+
+  /**
    * Extract YouTube video ID từ URL
    */
   private extractYouTubeId(url: string): string | null {
@@ -291,38 +344,70 @@ class YouTubeTranscriber {
   }
 
   /**
-   * Hàm chính để xử lý YouTube URL thành transcript
+   * Hàm chính để xử lý input (YouTube URL hoặc file MP3 local)
    */
-  async processYouTubeUrl(options: TranscriptOptions): Promise<void> {
-    const { youtubeUrl, outputDir = "./data", keepAudio = false } = options;
+  async processInput(options: TranscriptOptions): Promise<void> {
+    const { input, outputDir = "./data", keepAudio = false } = options;
     
     try {
-      // Validate YouTube URL
-      const urlPattern = /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)/;
-      if (!urlPattern.test(youtubeUrl)) {
-        throw new Error("URL không hợp lệ. Vui lòng nhập YouTube URL đúng định dạng.");
-      }
-
-      console.log(`🎬 Đang xử lý: ${youtubeUrl}`);
-      
+      const isInputUrl = this.isUrl(input);
       let transcript: string;
-      
-      // Bước 1: Thử lấy transcript có sẵn từ YouTube trước
-      const youtubeTranscript = await this.getYouTubeTranscript(youtubeUrl);
-      
-      if (youtubeTranscript) {
-        // Có transcript sẵn từ YouTube
-        transcript = youtubeTranscript;
-        console.log("🎯 Sử dụng transcript từ YouTube captions");
+      let outputFileName: string;
+      let fileContent: string;
+
+      if (isInputUrl) {
+        // Xử lý YouTube URL
+        console.log(`🎬 Đang xử lý YouTube: ${input}`);
+        
+        // Validate YouTube URL
+        const urlPattern = /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)/;
+        if (!urlPattern.test(input)) {
+          throw new Error("URL không hợp lệ. Vui lòng nhập YouTube URL đúng định dạng.");
+        }
+
+        // Bước 1: Thử lấy transcript có sẵn từ YouTube trước
+        const youtubeTranscript = await this.getYouTubeTranscript(input);
+        
+        if (youtubeTranscript) {
+          // Có transcript sẵn từ YouTube
+          transcript = youtubeTranscript;
+          console.log("🎯 Sử dụng transcript từ YouTube captions");
+        } else {
+          // Không có transcript sẵn, phải download audio và dùng AI
+          console.log("⚙️  Không có transcript sẵn, chuyển sang AI transcription...");
+          
+          // Bước 2: Download và chuyển đổi thành MP3
+          const mp3File = await this.downloadAndConvertToMp3(input);
+          
+          // Bước 3: Tạo transcript bằng OpenAI Whisper API
+          transcript = await this.transcribeWithOpenAI(mp3File);
+        }
+        
+        // Tạo tên file với YouTube ID
+        const youtubeId = this.extractYouTubeId(input);
+        outputFileName = youtubeId 
+          ? `transcript_${youtubeId}.txt`
+          : `transcript_${Date.now()}.txt`;
+          
+        // Tạo nội dung file với URL ở đầu
+        fileContent = `${input}\n\n${transcript}`;
+        
       } else {
-        // Không có transcript sẵn, phải download audio và dùng AI
-        console.log("⚙️  Không có transcript sẵn, chuyển sang AI transcription...");
+        // Xử lý file MP3 local
+        console.log(`🎵 Đang xử lý file local: ${input}`);
         
-        // Bước 2: Download và chuyển đổi thành MP3
-        const mp3File = await this.downloadAndConvertToMp3(youtubeUrl);
+        // Bước 1: Xử lý file MP3 local
+        const mp3File = await this.processLocalMp3(input);
         
-        // Bước 3: Tạo transcript bằng OpenAI Whisper API
+        // Bước 2: Tạo transcript bằng OpenAI Whisper API
         transcript = await this.transcribeWithOpenAI(mp3File);
+        
+        // Tạo tên file từ filename gốc
+        outputFileName = this.generateFilenameFromPath(input);
+        
+        // Tạo nội dung file với file path ở đầu
+        const absolutePath = path.resolve(input);
+        fileContent = `${absolutePath}\n\n${transcript}`;
       }
       
       // Đảm bảo thư mục output tồn tại
@@ -331,15 +416,7 @@ class YouTubeTranscriber {
         console.log(`📁 Đã tạo thư mục: ${outputDir}`);
       }
       
-      // Tạo tên file với YouTube ID (nếu có) hoặc timestamp (fallback)
-      const youtubeId = this.extractYouTubeId(youtubeUrl);
-      const outputFileName = youtubeId 
-        ? `transcript_${youtubeId}.txt`
-        : `transcript_${Date.now()}.txt`;
       const outputPath = path.join(outputDir, outputFileName);
-      
-      // Tạo nội dung file với URL ở đầu
-      const fileContent = `${youtubeUrl}\n\n${transcript}`;
       
       await writeFile(outputPath, fileContent, 'utf-8');
       console.log(`📝 Transcript đã được lưu tại: ${outputPath}`);
@@ -363,31 +440,39 @@ async function main() {
   
   if (args.length === 0) {
     console.log(`
-📺 YouTube Transcript Generator
+📺 YouTube Transcript Generator & Audio Transcriber
 
 Sử dụng:
-  bun run index.ts <youtube-url> [options]
+  bun run index.ts <youtube-url|audio-file> [options]
 
-Ví dụ:
+Ví dụ YouTube:
   bun run index.ts "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
   bun run index.ts "https://youtu.be/dQw4w9WgXcQ" --keep-audio
-  bun run index.ts "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --output ./transcripts
+
+Ví dụ file audio local:
+  bun run index.ts "./audio/recording.mp3"
+  bun run index.ts "/Users/name/audio.wav" --output ./transcripts
+  bun run index.ts "recording.m4a" --keep-audio
 
 Options:
   --keep-audio    Giữ lại file MP3 sau khi xử lý
   --output <dir>  Thư mục để lưu transcript (mặc định: ./data)
 
+Formats hỗ trợ:
+  - YouTube URLs: https://youtube.com/watch?v=..., https://youtu.be/...
+  - Audio files: .mp3, .wav, .m4a, .flac, .aac
+
 Yêu cầu:
-  - yt-dlp (đã cài đặt)
-  - ffmpeg (đã cài đặt)  
+  - yt-dlp (đã cài đặt) - cho YouTube
+  - ffmpeg (đã cài đặt) - cho conversion  
   - OPENAI_API_KEY (environment variable)
 `);
     process.exit(1);
   }
 
-  const youtubeUrl = args[0];
-  if (!youtubeUrl) {
-    throw new Error("URL không hợp lệ");
+  const input = args[0];
+  if (!input) {
+    throw new Error("Input không hợp lệ");
   }
   const keepAudio = args.includes('--keep-audio');
   
@@ -401,8 +486,8 @@ Yêu cầu:
   }
 
   const transcriber = new YouTubeTranscriber();
-  await transcriber.processYouTubeUrl({
-    youtubeUrl,
+  await transcriber.processInput({
+    input,
     outputDir,
     keepAudio
   });

@@ -1,6 +1,6 @@
-# YouTube Transcript Generator
+# YouTube Transcript Generator & Audio Transcriber
 
-Chương trình TypeScript chạy với Bun.js để chuyển đổi YouTube URL thành file transcript.
+Chương trình TypeScript chạy với Bun.js để chuyển đổi YouTube URL hoặc file audio local thành file transcript.
 
 ## Yêu cầu hệ thống
 
@@ -48,26 +48,44 @@ bun run index.ts "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 # Ví dụ với YouTube Short URL  
 bun run index.ts "https://youtu.be/dQw4w9WgXcQ"
 
-# Lưu transcript vào thư mục riêng
-bun run index.ts "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --output ./my_transcripts
+# YouTube URLs
+bun run index.ts "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+bun run index.ts "https://youtu.be/dQw4w9WgXcQ" --keep-audio
+
+# Local audio files
+bun run index.ts "./audio/recording.mp3"
+bun run index.ts "/Users/name/interview.wav" --output ./transcripts
+bun run index.ts "meeting.m4a" --keep-audio
 ```
 
 ## Cách hoạt động
 
+### **YouTube URLs:**
 1. **Kiểm tra YouTube Captions**: Ưu tiên lấy transcript có sẵn từ YouTube (closed captions do người dùng nhập)
-2. **AI Transcription** (nếu cần): 
-   - Download video và chuyển đổi thành MP3 
-   - Sử dụng OpenAI model `gpt-4o-transcribe` với language='en' và response_format='text'
-3. **Lưu kết quả**: Ghi transcript ra file .txt với URL ở đầu và nội dung transcript
+2. **AI Transcription** (nếu cần): Download video, chuyển đổi thành MP3 và transcribe
+3. **Lưu kết quả**: File với format `transcript_[youtube_id].txt`
+
+### **Local Audio Files:**
+1. **Kiểm tra file**: Validate file tồn tại và format được hỗ trợ (.mp3, .wav, .m4a, .flac, .aac)
+2. **Convert** (nếu cần): Tự động convert sang MP3 bằng ffmpeg
+3. **AI Transcription**: Sử dụng OpenAI model `gpt-4o-transcribe` với language='en' và response_format='text'
+4. **Lưu kết quả**: File với format `transcript_[filename].txt`
+
+### **Output Format:**
+- Dòng 1: URL/File path
+- Dòng 2: Empty line
+- Dòng 3+: Transcript content
 
 ## Cấu trúc file output
 
 ```
 data/                         # Thư mục output mặc định
-├── transcript_dQw4w9WgXcQ.txt   # File transcript (YouTube ID làm tên)
+├── transcript_dQw4w9WgXcQ.txt      # YouTube video (ID làm tên)
+├── transcript_recording.txt        # Local file (filename làm tên)
+├── transcript_interview.txt        # Local file (sanitized name)
 └── temp/                     # Thư mục tạm (tự động xóa)
-    ├── video.mp3            # File audio (xóa nếu không dùng --keep-audio)
-    └── video.txt            # File transcript tạm
+    ├── converted.mp3        # File convert tạm (nếu input không phải MP3)
+    └── video.mp3            # File download tạm (YouTube)
 ```
 
 ## Xử lý lỗi
